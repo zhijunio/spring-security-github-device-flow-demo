@@ -1,0 +1,21 @@
+spring:
+  application:
+    name: spring-security-github-device-flow-demo
+  config:
+    import: optional:file:.env[.properties]
+  http:
+    clients:
+      connect-timeout: 3s
+      read-timeout: 5s
+server:
+  port: ${SERVER_PORT:8080}
+  servlet:
+    session:
+      cookie:
+        http-only: true
+        same-site: lax
+        secure: ${SESSION_COOKIE_SECURE:false}
+github:
+  device-flow:
+    client-id: ${GITHUB_CLIENT_ID:}
+    scope: read:user
