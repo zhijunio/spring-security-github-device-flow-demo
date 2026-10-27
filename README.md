@@ -3,8 +3,11 @@
 [![Java](https://img.shields.io/badge/Java-25-blue)](https://adoptium.net/)
 [![Spring Boot](https://img.shields.io/badge/Spring%20Boot-4.1.2-6DB33F)](https://spring.io/projects/spring-boot)
 [![Spring Security](https://img.shields.io/badge/Spring%20Security-7.1.2-6DB33F)](https://spring.io/projects/spring-security)
-[![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
+[![Maven](https://img.shields.io/badge/Maven-3.10.0-C71A36?logo=apachemaven&logoColor=white)](https://maven.apache.org/)
 [![GitHub Device Flow](https://img.shields.io/badge/GitHub-Device%20Flow-181717?logo=github)](https://docs.github.com/en/apps/oauth-apps/building-oauth-apps/authorizing-oauth-apps#device-flow)
+[![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
+
+[简体中文](README.zh-CN.md) | English
 
 A runnable tutorial sample that signs a browser into a Spring Security session through GitHub OAuth Device Flow.
 
@@ -93,3 +96,7 @@ sequenceDiagram
 ## Create the project with Spring Initializr
 
 Select Spring Boot 4.1.2, Java 25, Maven, and add Spring Security, OAuth2 Client, Spring RestClient, Spring Jackson, and Spring Web MVC. The `spring-boot-developer` skill can generate the same baseline; see its [repository](https://github.com/zhijunio/skills/tree/main/spring-boot-developer).
+
+## License
+
+This project is licensed under the Apache License 2.0. See [LICENSE](LICENSE) for the full terms.

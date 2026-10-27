@@ -3,8 +3,11 @@
 [![Java](https://img.shields.io/badge/Java-25-blue)](https://adoptium.net/)
 [![Spring Boot](https://img.shields.io/badge/Spring%20Boot-4.1.2-6DB33F)](https://spring.io/projects/spring-boot)
 [![Spring Security](https://img.shields.io/badge/Spring%20Security-7.1.2-6DB33F)](https://spring.io/projects/spring-security)
-[![许可证](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
+[![Maven](https://img.shields.io/badge/Maven-3.10.0-C71A36?logo=apachemaven&logoColor=white)](https://maven.apache.org/)
 [![GitHub Device Flow](https://img.shields.io/badge/GitHub-Device%20Flow-181717?logo=github)](https://docs.github.com/en/apps/oauth-apps/building-oauth-apps/authorizing-oauth-apps#device-flow)
+[![许可证](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
+
+简体中文 | [English](README.md)
 
 这是一个可运行的教程示例：通过 GitHub OAuth Device Flow 登录，并由 Spring Security 建立本站 HTTP Session。
 
@@ -93,3 +96,7 @@ sequenceDiagram
 ## 使用 Spring Initializr 创建项目
 
 选择 Spring Boot 4.1.2、Java 25、Maven，并添加 Spring Security、OAuth2 Client、Spring RestClient、Spring Jackson 和 Spring Web MVC。也可以使用 `spring-boot-developer` 技能生成相同基线，详见其[技能仓库](https://github.com/zhijunio/skills/tree/main/spring-boot-developer)。
+
+## 许可证
+
+本项目采用 Apache License 2.0。完整许可条款请参阅 [LICENSE](LICENSE)。
