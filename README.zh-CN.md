@@ -59,23 +59,23 @@ export GITHUB_CLIENT_ID='你的 OAuth App Client ID'
 
 ```mermaid
 sequenceDiagram
-    actor User as 用户
-    participant Browser as 浏览器
-    participant App as Spring Boot 应用
-    participant GitHub
-    Browser->>App: POST /api/device-login（带 CSRF Token）
-    App->>GitHub: POST /login/device/code
-    GitHub-->>App: device_code、user_code、interval、过期时间
-    App-->>Browser: user_code 和验证地址
-    User->>GitHub: 输入代码并批准 read:user
+    actor U as "用户"
+    participant B as "浏览器"
+    participant App as "Spring Boot 应用"
+    participant GH as "GitHub"
+    B->>App: POST /api/device-login 并携带 CSRF Token
+    App->>GH: POST /login/device/code
+    GH-->>App: device_code、user_code、interval 和过期时间
+    App-->>B: user_code 和验证地址
+    U->>GH: 输入代码并批准 read user 权限
     loop 按 GitHub 要求的间隔
-        App->>GitHub: POST /login/oauth/access_token
-        GitHub-->>App: authorization_pending 或 access_token
+        App->>GH: POST /login/oauth/access_token
+        GH-->>App: authorization_pending 或 access_token
     end
-    App->>GitHub: 使用 bearer token 请求 GET /user
-    GitHub-->>App: GitHub 用户资料
+    App->>GH: 使用 bearer token 请求 GET /user
+    GH-->>App: GitHub 用户资料
     App->>App: 创建 Authentication 并将 SecurityContext 保存到 HTTP Session
-    App-->>Browser: 更新 Session Cookie，完成登录
+    App-->>B: 更新 Session Cookie，完成登录
 ```
 
 `GitHubDeviceFlowClient` 发起设备授权请求；自定义 provider 通过 `OAuth2AuthorizedClientManager` 轮询令牌，`DefaultOAuth2UserService` 读取 GitHub 用户资料。Spring Security 创建 `OAuth2AuthenticationToken`、轮换 Session ID、将授权客户端保存在 HTTP Session 中，并持久化 `SecurityContext`。设备事务和 manager 使用的临时授权客户端保存在进程内存，定时清理任务会移除过期事务。该示例适合单实例学习，不适用于多实例横向扩展部署。

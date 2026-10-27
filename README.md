@@ -59,23 +59,23 @@ For a direct session check, `GET /api/me` returns `401` before login and the Git
 
 ```mermaid
 sequenceDiagram
-    actor User
-    participant Browser
-    participant App as Spring Boot app
-    participant GitHub
-    Browser->>App: POST /api/device-login (CSRF)
-    App->>GitHub: POST /login/device/code
-    GitHub-->>App: device_code, user_code, interval, expiry
-    App-->>Browser: user_code and verification_uri
-    User->>GitHub: Enter code and approve read:user
-    loop GitHub-provided interval
-        App->>GitHub: POST /login/oauth/access_token
-        GitHub-->>App: authorization_pending or access_token
+    actor U as "User"
+    participant B as "Browser"
+    participant App as "Spring Boot app"
+    participant GH as "GitHub"
+    B->>App: POST /api/device-login with CSRF token
+    App->>GH: POST /login/device/code
+    GH-->>App: device_code, user_code, interval, expiry
+    App-->>B: user_code and verification_uri
+    U->>GH: Enter code and approve read user scope
+    loop GitHub polling interval
+        App->>GH: POST /login/oauth/access_token
+        GH-->>App: authorization_pending or access_token
     end
-    App->>GitHub: GET /user with bearer token
-    GitHub-->>App: GitHub profile
+    App->>GH: GET /user with bearer token
+    GH-->>App: GitHub profile
     App->>App: Create Authentication and save SecurityContext in HTTP session
-    App-->>Browser: Rotated session cookie; authenticated session
+    App-->>B: Rotated session cookie; authenticated session
 ```
 
 `GitHubDeviceFlowClient` starts the device authorization request. The custom provider performs token polling through `OAuth2AuthorizedClientManager`, and `DefaultOAuth2UserService` retrieves the GitHub profile. Spring Security creates an `OAuth2AuthenticationToken`, rotates the session ID, stores the authorized client in the HTTP session, and persists the `SecurityContext`. Device transactions and the manager's temporary authorized clients are kept in process memory; a scheduled cleanup removes expired transactions. This is a single-instance learning example rather than a horizontally scaled production design.
