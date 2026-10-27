@@ -101,13 +101,38 @@ function App() {
           setUser(session.user)
           setFlow(null)
           setError('')
-        } else if (status.state === 'PENDING') {
-          setFlow((current) => current?.id === flow.id ? { ...current, ...status } : current)
         } else {
-          setFlow((current) => current?.id === flow.id ? { ...current, ...status } : current)
+          setFlow((current) => current?.id === flow.id
+            ? { ...current, ...status, retryDelaySeconds: undefined }
+            : current)
+          setError('')
         }
       } catch (cause) {
         setError(cause.message)
+        if (!cause.status || cause.status >= 500) {
+          const retryDelaySeconds = Math.min(
+            flow.retryDelaySeconds ? flow.retryDelaySeconds * 2 : Math.max(1, flow.intervalSeconds || 5),
+            30,
+          )
+          setFlow((current) => current?.id === flow.id
+            ? { ...current, retryAfterSeconds: retryDelaySeconds, retryDelaySeconds }
+            : current)
+        } else if (cause.status === 404) {
+          try {
+            const session = await api('/api/session')
+            if (session.authenticated) {
+              setUser(session.user)
+              setFlow(null)
+              setError('')
+              return
+            }
+          } catch {
+            // Keep the original polling error when the follow-up session check also fails.
+          }
+          setFlow((current) => current?.id === flow.id ? { ...current, state: 'FAILED' } : current)
+        } else {
+          setFlow((current) => current?.id === flow.id ? { ...current, state: 'FAILED' } : current)
+        }
       }
     }, delay)
     return () => window.clearTimeout(timer)

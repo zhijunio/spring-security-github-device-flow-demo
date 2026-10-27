@@ -8,7 +8,7 @@
 
 A runnable tutorial sample that signs a browser into a Spring Security session through GitHub OAuth Device Flow.
 
-> The sample calls GitHub's Device Flow endpoints with Spring `RestClient`. Spring Security manages the local authentication and HTTP session. It does not use `oauth2Login()` or a built-in OAuth2 Client Device Flow implementation: Spring Security's OAuth2 Login is based on the Authorization Code Grant.
+> This sample uses Spring Security OAuth2 Client's `ClientRegistration`, `OAuth2AuthorizedClientManager`, `OAuth2AuthorizedClientService`, and `OAuth2UserService`. Spring Security does not provide a built-in Device Authorization Grant provider, so the sample adds a small `OAuth2AuthorizedClientProvider` for GitHub's device-code token exchange. It does not use `oauth2Login()`, which follows the Authorization Code Grant.
 
 ## Requirements
 
@@ -43,7 +43,7 @@ Open <http://localhost:8080>. The Maven build installs the pinned Node/npm versi
 
 To confirm the running process loaded the setting, open <http://localhost:8080/api/config>; it should return `{"clientConfigured":true}`. Environment changes do not update an already-running process, so restart it after setting the variable.
 
-The app requests only the `read:user` scope. Its UI displays the short-lived user code and verification link. After approval, the server polls GitHub, reads `/user`, and establishes the browser's Spring Security session. The GitHub access token and device code stay on the server.
+The app requests only the `read:user` scope. Its UI displays the short-lived user code and verification link. After approval, the custom provider polls GitHub through the OAuth2 Client manager; `DefaultOAuth2UserService` reads `/user`, and Spring Security establishes the browser session. The GitHub access token and device code stay on the server.
 
 ## Try the flow
 
@@ -78,17 +78,18 @@ sequenceDiagram
     App-->>Browser: Rotated session cookie; authenticated session
 ```
 
-The OAuth grant requests and GitHub profile lookup are explicit calls in `GitHubDeviceFlowClient`. Spring Security protects the APIs, preserves CSRF, rotates the session ID on authentication, and persists the `SecurityContext`. This sample keeps device transactions in process memory, so it is a single-instance learning example rather than a horizontally scaled production design.
+`GitHubDeviceFlowClient` starts the device authorization request. The custom provider performs token polling through `OAuth2AuthorizedClientManager`, and `DefaultOAuth2UserService` retrieves the GitHub profile. Spring Security creates an `OAuth2AuthenticationToken`, rotates the session ID, stores the authorized client in the HTTP session, and persists the `SecurityContext`. Device transactions and the manager's temporary authorized clients are kept in process memory; a scheduled cleanup removes expired transactions. This is a single-instance learning example rather than a horizontally scaled production design.
 
 ## Security notes
 
 - Only the `user_code` and GitHub verification URI are sent to the browser; `device_code` and access tokens remain server-side.
 - Polling follows GitHub's returned `interval`; `slow_down` adds five seconds. Denied and expired transactions become terminal.
+- Temporary browser polling failures and GitHub device-token endpoint connection failures are retried; browser retries use a delay that grows up to 30 seconds. Denial, expiry, and other terminal GitHub authorization errors end the transaction.
 - Device transactions are bound to the initiating HTTP session and use an opaque random ID.
 - The GitHub verification URI is checked before it is returned to the browser.
 - HTTP sessions use `HttpOnly` and `SameSite=Lax` cookies. Set `SESSION_COOKIE_SECURE=true` behind HTTPS.
-- This sample stores the authenticated GitHub profile in the session but does not persist users or roles.
+- The authenticated profile and authorized client are stored in the HTTP session; the sample does not persist local users or roles.
 
 ## Create the project with Spring Initializr
 
-Select Spring Boot 4.1.2, Java 25, Maven, and add Spring Security, Spring RestClient, Spring Jackson, and Spring Web MVC. The `spring-boot-developer` skill can generate the same baseline; see its [repository](https://github.com/zhijunio/skills/tree/main/spring-boot-developer).
+Select Spring Boot 4.1.2, Java 25, Maven, and add Spring Security, OAuth2 Client, Spring RestClient, Spring Jackson, and Spring Web MVC. The `spring-boot-developer` skill can generate the same baseline; see its [repository](https://github.com/zhijunio/skills/tree/main/spring-boot-developer).

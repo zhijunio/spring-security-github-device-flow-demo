@@ -2,17 +2,21 @@ package io.github.zhijunio.githubdeviceflow.github;
 
 import io.github.zhijunio.githubdeviceflow.config.GitHubDeviceFlowProperties;
 import io.github.zhijunio.githubdeviceflow.github.DeviceLoginService.DeviceLoginSnapshot;
-import io.github.zhijunio.githubdeviceflow.github.GitHubDeviceFlowClient.GitHubUser;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import jakarta.servlet.http.HttpSession;
+import java.util.ArrayList;
 import java.util.List;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
-import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.core.authority.SimpleGrantedAuthority;
 import org.springframework.security.core.context.SecurityContext;
 import org.springframework.security.core.context.SecurityContextHolder;
+import org.springframework.security.oauth2.client.OAuth2AuthorizedClient;
+import org.springframework.security.oauth2.client.OAuth2AuthorizedClientService;
+import org.springframework.security.oauth2.client.authentication.OAuth2AuthenticationToken;
+import org.springframework.security.oauth2.client.web.OAuth2AuthorizedClientRepository;
+import org.springframework.security.oauth2.core.user.OAuth2User;
 import org.springframework.security.web.authentication.session.SessionAuthenticationStrategy;
 import org.springframework.security.web.context.SecurityContextRepository;
 import org.springframework.security.web.csrf.CsrfToken;
@@ -27,16 +31,22 @@ public class DeviceLoginController {
 
     private final DeviceLoginService deviceLoginService;
     private final GitHubDeviceFlowProperties properties;
+    private final OAuth2AuthorizedClientService authorizedClientService;
+    private final OAuth2AuthorizedClientRepository authorizedClientRepository;
     private final SecurityContextRepository securityContextRepository;
     private final SessionAuthenticationStrategy sessionAuthenticationStrategy;
 
     public DeviceLoginController(
             DeviceLoginService deviceLoginService,
             GitHubDeviceFlowProperties properties,
+            OAuth2AuthorizedClientService authorizedClientService,
+            OAuth2AuthorizedClientRepository authorizedClientRepository,
             SecurityContextRepository securityContextRepository,
             SessionAuthenticationStrategy sessionAuthenticationStrategy) {
         this.deviceLoginService = deviceLoginService;
         this.properties = properties;
+        this.authorizedClientService = authorizedClientService;
+        this.authorizedClientRepository = authorizedClientRepository;
         this.securityContextRepository = securityContextRepository;
         this.sessionAuthenticationStrategy = sessionAuthenticationStrategy;
     }
@@ -65,7 +75,7 @@ public class DeviceLoginController {
         DeviceLoginSnapshot snapshot = deviceLoginService.poll(id, session.getId());
         if ("AUTHORIZED".equals(snapshot.state())) {
             deviceLoginService.establishSession(
-                    id, session.getId(), user -> establishSecuritySession(user, request, response));
+                    id, session.getId(), (user, client) -> establishSecuritySession(user, client, request, response));
             return new DeviceLoginSnapshot(
                     snapshot.id(),
                     "AUTHENTICATED",
@@ -88,26 +98,47 @@ public class DeviceLoginController {
 
     @GetMapping("/api/session")
     SessionResponse session(org.springframework.security.core.Authentication authentication) {
-        if (authentication == null || !(authentication.getPrincipal() instanceof GitHubUser user)) {
+        if (authentication == null || !(authentication.getPrincipal() instanceof OAuth2User user)) {
             return new SessionResponse(false, null);
         }
-        return new SessionResponse(true, new ProfileResponse(user.id(), user.login(), user.name(), user.avatarUrl()));
+        return new SessionResponse(true, profile(user));
     }
 
     @GetMapping("/api/me")
     ProfileResponse me(org.springframework.security.core.Authentication authentication) {
-        GitHubUser user = (GitHubUser) authentication.getPrincipal();
-        return new ProfileResponse(user.id(), user.login(), user.name(), user.avatarUrl());
+        return profile((OAuth2User) authentication.getPrincipal());
     }
 
-    private void establishSecuritySession(GitHubUser user, HttpServletRequest request, HttpServletResponse response) {
-        var authentication = UsernamePasswordAuthenticationToken.authenticated(
-                user, null, List.of(new SimpleGrantedAuthority("ROLE_USER")));
+    private void establishSecuritySession(
+            OAuth2User user, OAuth2AuthorizedClient client, HttpServletRequest request, HttpServletResponse response) {
+        List<org.springframework.security.core.GrantedAuthority> authorities = new ArrayList<>(user.getAuthorities());
+        authorities.add(new SimpleGrantedAuthority("ROLE_USER"));
+        var authentication = new OAuth2AuthenticationToken(user, authorities, "github");
         sessionAuthenticationStrategy.onAuthentication(authentication, request, response);
         SecurityContext context = SecurityContextHolder.createEmptyContext();
         context.setAuthentication(authentication);
         SecurityContextHolder.setContext(context);
+        OAuth2AuthorizedClient userClient = new OAuth2AuthorizedClient(
+                client.getClientRegistration(),
+                authentication.getName(),
+                client.getAccessToken(),
+                client.getRefreshToken());
+        authorizedClientRepository.saveAuthorizedClient(userClient, authentication, request, response);
+        authorizedClientService.removeAuthorizedClient("github", client.getPrincipalName());
         securityContextRepository.saveContext(context, request, response);
+    }
+
+    private static ProfileResponse profile(OAuth2User user) {
+        Object id = user.getAttribute("id");
+        Object login = user.getAttribute("login");
+        Object name = user.getAttribute("name");
+        Object avatarUrl = user.getAttribute("avatar_url");
+        long numericId = id instanceof Number number ? number.longValue() : Long.parseLong(String.valueOf(id));
+        return new ProfileResponse(
+                numericId,
+                String.valueOf(login),
+                name == null ? null : String.valueOf(name),
+                avatarUrl == null ? null : String.valueOf(avatarUrl));
     }
 
     private static DeviceLoginSnapshot notFound() {

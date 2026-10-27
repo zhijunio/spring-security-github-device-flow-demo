@@ -2,11 +2,11 @@ package io.github.zhijunio.githubdeviceflow.github;
 
 import com.fasterxml.jackson.annotation.JsonProperty;
 import io.github.zhijunio.githubdeviceflow.config.GitHubDeviceFlowProperties;
-import java.io.Serial;
-import java.io.Serializable;
+import io.github.zhijunio.githubdeviceflow.config.OAuth2ClientConfiguration;
 import java.net.URI;
-import java.security.Principal;
 import org.springframework.http.MediaType;
+import org.springframework.security.oauth2.client.registration.ClientRegistration;
+import org.springframework.security.oauth2.client.registration.ClientRegistrationRepository;
 import org.springframework.stereotype.Component;
 import org.springframework.util.LinkedMultiValueMap;
 import org.springframework.util.MultiValueMap;
@@ -19,22 +19,24 @@ public class GitHubDeviceFlowClient {
     private static final String DEVICE_GRANT_TYPE = "urn:ietf:params:oauth:grant-type:device_code";
 
     private final RestClient oauthClient;
-    private final RestClient apiClient;
     private final GitHubDeviceFlowProperties properties;
+    private final ClientRegistration registration;
 
     public GitHubDeviceFlowClient(
-            RestClient gitHubOAuthClient, RestClient gitHubApiClient, GitHubDeviceFlowProperties properties) {
+            RestClient gitHubOAuthClient,
+            GitHubDeviceFlowProperties properties,
+            ClientRegistrationRepository registrations) {
         this.oauthClient = gitHubOAuthClient;
-        this.apiClient = gitHubApiClient;
         this.properties = properties;
+        this.registration = registrations.findByRegistrationId(OAuth2ClientConfiguration.REGISTRATION_ID);
     }
 
     public DeviceAuthorization requestDeviceAuthorization() {
         MultiValueMap<String, String> form = new LinkedMultiValueMap<>();
-        form.add("client_id", properties.clientId());
-        form.add("scope", properties.scope());
+        form.add("client_id", registration.getClientId());
+        form.add("scope", String.join(" ", registration.getScopes()));
 
-        DeviceAuthorization response = oauthPost("/login/device/code", form, DeviceAuthorization.class);
+        DeviceAuthorization response = oauthPost(properties.deviceAuthorizationUri(), form, DeviceAuthorization.class);
         if (response == null
                 || isBlank(response.deviceCode())
                 || isBlank(response.userCode())
@@ -50,34 +52,17 @@ public class GitHubDeviceFlowClient {
 
     public TokenResponse pollAccessToken(String deviceCode) {
         MultiValueMap<String, String> form = new LinkedMultiValueMap<>();
-        form.add("client_id", properties.clientId());
+        form.add("client_id", registration.getClientId());
         form.add("device_code", deviceCode);
         form.add("grant_type", DEVICE_GRANT_TYPE);
-        return oauthPost("/login/oauth/access_token", form, TokenResponse.class);
+        return oauthPost(registration.getProviderDetails().getTokenUri(), form, TokenResponse.class);
     }
 
-    public GitHubUser currentUser(String accessToken) {
-        try {
-            GitHubUser user = apiClient
-                    .get()
-                    .uri("/user")
-                    .headers(headers -> headers.setBearerAuth(accessToken))
-                    .retrieve()
-                    .body(GitHubUser.class);
-            if (user == null || user.id() < 1 || isBlank(user.login())) {
-                throw new GitHubProviderException("无法读取 GitHub 用户身份。");
-            }
-            return user;
-        } catch (RestClientException exception) {
-            throw new GitHubProviderException("暂时无法读取 GitHub 用户身份。", exception);
-        }
-    }
-
-    private <T> T oauthPost(String path, MultiValueMap<String, String> form, Class<T> responseType) {
+    private <T> T oauthPost(String uri, MultiValueMap<String, String> form, Class<T> responseType) {
         try {
             return oauthClient
                     .post()
-                    .uri(path)
+                    .uri(URI.create(uri))
                     .contentType(MediaType.APPLICATION_FORM_URLENCODED)
                     .body(form)
                     .retrieve()
@@ -119,27 +104,9 @@ public class GitHubDeviceFlowClient {
             @JsonProperty("token_type") String tokenType,
             String scope,
             String error,
-            @JsonProperty("error_description") String errorDescription) {
-
-        public boolean hasAccessToken() {
-            return !isBlank(accessToken);
-        }
-    }
-
-    public record GitHubUser(
-            long id,
-            String login,
-            String name,
-            @JsonProperty("avatar_url") String avatarUrl) implements Principal, Serializable {
-
-        @Serial
-        private static final long serialVersionUID = 1L;
-
-        @Override
-        public String getName() {
-            return login;
-        }
-    }
+            @JsonProperty("error_description") String errorDescription,
+            @JsonProperty("expires_in") Long expiresIn,
+            @JsonProperty("refresh_token") String refreshToken) {}
 
     public static class GitHubProviderException extends RuntimeException {
 

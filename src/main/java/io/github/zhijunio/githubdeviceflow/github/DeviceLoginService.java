@@ -1,7 +1,7 @@
 package io.github.zhijunio.githubdeviceflow.github;
 
-import static io.github.zhijunio.githubdeviceflow.github.GitHubDeviceFlowClient.GitHubUser;
-import static io.github.zhijunio.githubdeviceflow.github.GitHubDeviceFlowClient.TokenResponse;
+import static io.github.zhijunio.githubdeviceflow.config.OAuth2ClientConfiguration.REGISTRATION_ID;
+import static io.github.zhijunio.githubdeviceflow.github.DeviceCodeOAuth2AuthorizedClientProvider.DEVICE_CODE_ATTRIBUTE;
 
 import io.github.zhijunio.githubdeviceflow.config.GitHubDeviceFlowProperties;
 import io.github.zhijunio.githubdeviceflow.github.GitHubDeviceFlowClient.DeviceAuthorization;
@@ -12,8 +12,17 @@ import java.time.Instant;
 import java.util.Base64;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.function.Consumer;
+import java.util.function.BiConsumer;
 import org.springframework.http.HttpStatus;
+import org.springframework.scheduling.annotation.Scheduled;
+import org.springframework.security.oauth2.client.OAuth2AuthorizeRequest;
+import org.springframework.security.oauth2.client.OAuth2AuthorizedClient;
+import org.springframework.security.oauth2.client.OAuth2AuthorizedClientManager;
+import org.springframework.security.oauth2.client.OAuth2AuthorizedClientService;
+import org.springframework.security.oauth2.client.userinfo.DefaultOAuth2UserService;
+import org.springframework.security.oauth2.client.userinfo.OAuth2UserRequest;
+import org.springframework.security.oauth2.core.OAuth2AuthorizationException;
+import org.springframework.security.oauth2.core.user.OAuth2User;
 import org.springframework.stereotype.Service;
 import org.springframework.web.server.ResponseStatusException;
 
@@ -22,13 +31,25 @@ public class DeviceLoginService {
 
     private final GitHubDeviceFlowProperties properties;
     private final GitHubDeviceFlowClient gitHub;
+    private final OAuth2AuthorizedClientManager authorizedClientManager;
+    private final OAuth2AuthorizedClientService authorizedClientService;
+    private final DefaultOAuth2UserService userService;
     private final Clock clock;
     private final SecureRandom secureRandom = new SecureRandom();
     private final Map<String, DeviceTransaction> transactions = new ConcurrentHashMap<>();
 
-    public DeviceLoginService(GitHubDeviceFlowProperties properties, GitHubDeviceFlowClient gitHub, Clock clock) {
+    public DeviceLoginService(
+            GitHubDeviceFlowProperties properties,
+            GitHubDeviceFlowClient gitHub,
+            OAuth2AuthorizedClientManager authorizedClientManager,
+            OAuth2AuthorizedClientService authorizedClientService,
+            DefaultOAuth2UserService userService,
+            Clock clock) {
         this.properties = properties;
         this.gitHub = gitHub;
+        this.authorizedClientManager = authorizedClientManager;
+        this.authorizedClientService = authorizedClientService;
+        this.userService = userService;
         this.clock = clock;
     }
 
@@ -38,11 +59,6 @@ public class DeviceLoginService {
         }
 
         Instant now = clock.instant();
-        transactions
-                .entrySet()
-                .removeIf(entry ->
-                        entry.getValue().expiresAt.plus(Duration.ofMinutes(2)).isBefore(now));
-
         DeviceAuthorization authorization = gitHub.requestDeviceAuthorization();
         DeviceTransaction transaction = new DeviceTransaction(
                 randomId(),
@@ -71,31 +87,36 @@ public class DeviceLoginService {
 
             Instant attemptedAt = now;
             transaction.nextPollAt = attemptedAt.plusSeconds(transaction.intervalSeconds);
+            OAuth2AuthorizedClient authorizedClient;
             try {
-                TokenResponse token = gitHub.pollAccessToken(transaction.deviceCode);
-                if (token == null) {
-                    transaction.state = State.FAILED;
-                } else if ("authorization_pending".equals(token.error())) {
-                    // Keep waiting at the interval supplied by GitHub.
-                } else if ("slow_down".equals(token.error())) {
-                    transaction.intervalSeconds += 5;
-                    transaction.nextPollAt = clock.instant().plusSeconds(transaction.intervalSeconds);
-                } else if ("expired_token".equals(token.error()) || "token_expired".equals(token.error())) {
-                    transaction.state = State.EXPIRED;
-                    transaction.deviceCode = null;
-                } else if ("access_denied".equals(token.error())) {
-                    transaction.state = State.DENIED;
-                    transaction.deviceCode = null;
-                } else if (token.hasAccessToken()) {
-                    GitHubUser user = gitHub.currentUser(token.accessToken());
-                    transaction.user = user;
-                    transaction.state = State.AUTHORIZED;
-                    transaction.deviceCode = null;
-                } else {
-                    transaction.state = State.FAILED;
-                    transaction.deviceCode = null;
-                }
+                OAuth2AuthorizeRequest request = OAuth2AuthorizeRequest.withClientRegistrationId(REGISTRATION_ID)
+                        .principal("device-flow:" + transaction.id)
+                        .attribute(DEVICE_CODE_ATTRIBUTE, transaction.deviceCode)
+                        .build();
+                authorizedClient = authorizedClientManager.authorize(request);
+            } catch (OAuth2AuthorizationException exception) {
+                applyProviderError(transaction, exception);
+                return snapshot(transaction, clock.instant());
             } catch (GitHubDeviceFlowClient.GitHubProviderException exception) {
+                transaction.nextPollAt = clock.instant().plusSeconds(transaction.intervalSeconds);
+                return snapshot(transaction, clock.instant());
+            }
+
+            if (authorizedClient == null) {
+                transaction.state = State.FAILED;
+                transaction.deviceCode = null;
+                return snapshot(transaction, clock.instant());
+            }
+
+            try {
+                OAuth2User user = userService.loadUser(new OAuth2UserRequest(
+                        authorizedClient.getClientRegistration(), authorizedClient.getAccessToken()));
+                transaction.authorizedClient = authorizedClient;
+                transaction.user = user;
+                transaction.state = State.AUTHORIZED;
+                transaction.deviceCode = null;
+            } catch (RuntimeException exception) {
+                removeTemporaryAuthorizedClient(transaction);
                 transaction.state = State.FAILED;
                 transaction.deviceCode = null;
             }
@@ -103,16 +124,21 @@ public class DeviceLoginService {
         }
     }
 
-    public void establishSession(String id, String ownerSessionId, Consumer<GitHubUser> establish) {
+    public void establishSession(
+            String id, String ownerSessionId, BiConsumer<OAuth2User, OAuth2AuthorizedClient> establish) {
         DeviceTransaction transaction = requireOwned(id, ownerSessionId);
         synchronized (transaction) {
             if (transaction.state == State.AUTHENTICATED) return;
-            if (transaction.state != State.AUTHORIZED || transaction.user == null) {
+            if (transaction.state != State.AUTHORIZED
+                    || transaction.user == null
+                    || transaction.authorizedClient == null) {
                 throw new ResponseStatusException(HttpStatus.CONFLICT, "GitHub 授权尚未完成。");
             }
-            establish.accept(transaction.user);
+            establish.accept(transaction.user, transaction.authorizedClient);
+            removeTemporaryAuthorizedClient(transaction);
             transaction.state = State.AUTHENTICATED;
             transaction.user = null;
+            transaction.authorizedClient = null;
         }
     }
 
@@ -124,6 +150,44 @@ public class DeviceLoginService {
                 transaction.deviceCode = null;
             }
         }
+    }
+
+    @Scheduled(fixedDelay = 60_000)
+    void removeExpiredTransactions() {
+        Instant cutoff = clock.instant().minus(Duration.ofMinutes(2));
+        transactions.forEach((id, transaction) -> {
+            synchronized (transaction) {
+                if (transaction.expiresAt.isBefore(cutoff) && transactions.remove(id, transaction)) {
+                    removeTemporaryAuthorizedClient(transaction);
+                    transaction.deviceCode = null;
+                    transaction.user = null;
+                    transaction.authorizedClient = null;
+                }
+            }
+        });
+    }
+
+    private void applyProviderError(DeviceTransaction transaction, OAuth2AuthorizationException exception) {
+        String error = exception.getError().getErrorCode();
+        if ("authorization_pending".equals(error)) return;
+        if ("slow_down".equals(error)) {
+            transaction.intervalSeconds += 5;
+            transaction.nextPollAt = clock.instant().plusSeconds(transaction.intervalSeconds);
+            return;
+        }
+        if ("expired_token".equals(error) || "token_expired".equals(error)) {
+            transaction.state = State.EXPIRED;
+        } else if ("access_denied".equals(error)) {
+            transaction.state = State.DENIED;
+        } else {
+            transaction.state = State.FAILED;
+        }
+        transaction.deviceCode = null;
+        removeTemporaryAuthorizedClient(transaction);
+    }
+
+    private void removeTemporaryAuthorizedClient(DeviceTransaction transaction) {
+        authorizedClientService.removeAuthorizedClient(REGISTRATION_ID, "device-flow:" + transaction.id);
     }
 
     private DeviceTransaction requireOwned(String id, String ownerSessionId) {
@@ -163,7 +227,8 @@ public class DeviceLoginService {
         private int intervalSeconds;
         private Instant nextPollAt;
         private String deviceCode;
-        private GitHubUser user;
+        private OAuth2User user;
+        private OAuth2AuthorizedClient authorizedClient;
         private State state = State.PENDING;
 
         private DeviceTransaction(

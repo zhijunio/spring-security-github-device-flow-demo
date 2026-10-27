@@ -8,7 +8,7 @@
 
 这是一个可运行的教程示例：通过 GitHub OAuth Device Flow 登录，并由 Spring Security 建立本站 HTTP Session。
 
-> 示例使用 Spring `RestClient` 调用 GitHub Device Flow 接口；Spring Security 管理本站认证和 Session。它没有使用 `oauth2Login()`，也没有内置的 OAuth2 Client Device Flow 实现：Spring Security 的 OAuth2 Login 使用授权码流程。
+> 示例使用 Spring Security OAuth2 Client 的 `ClientRegistration`、`OAuth2AuthorizedClientManager`、`OAuth2AuthorizedClientService` 和 `OAuth2UserService`。Spring Security 没有内置 Device Authorization Grant provider，因此示例通过自定义 `OAuth2AuthorizedClientProvider` 完成 GitHub 设备码令牌交换。它没有使用 `oauth2Login()`；该功能使用的是授权码流程。
 
 ## 环境要求
 
@@ -43,7 +43,7 @@ export GITHUB_CLIENT_ID='你的 OAuth App Client ID'
 
 可以打开 <http://localhost:8080/api/config> 检查运行中的进程是否读取配置；预期返回 `{"clientConfigured":true}`。环境变量不会自动更新已经启动的进程，设置后要重启应用。
 
-应用只申请 `read:user` 权限。页面展示短时 user code 和 GitHub 验证地址。用户确认后，服务端按 GitHub 返回的间隔轮询，读取 `/user`，再建立浏览器的 Spring Security Session。GitHub access token 和 device code 不会发给前端。
+应用只申请 `read:user` 权限。页面展示短时 user code 和 GitHub 验证地址。用户确认后，自定义 provider 通过 OAuth2 Client manager 按 GitHub 返回的间隔轮询；`DefaultOAuth2UserService` 读取 `/user`，Spring Security 随后建立浏览器 Session。GitHub access token 和 device code 不会发给前端。
 
 ## 操作步骤
 
@@ -78,17 +78,18 @@ sequenceDiagram
     App-->>Browser: 更新 Session Cookie，完成登录
 ```
 
-`GitHubDeviceFlowClient` 明确执行 OAuth 授权请求和用户资料查询。Spring Security 保护接口、保留 CSRF 校验、认证时轮换 Session ID，并持久化 `SecurityContext`。设备登录事务保存在进程内存，因此示例适合单实例学习，不适用于多实例横向扩展部署。
+`GitHubDeviceFlowClient` 发起设备授权请求；自定义 provider 通过 `OAuth2AuthorizedClientManager` 轮询令牌，`DefaultOAuth2UserService` 读取 GitHub 用户资料。Spring Security 创建 `OAuth2AuthenticationToken`、轮换 Session ID、将授权客户端保存在 HTTP Session 中，并持久化 `SecurityContext`。设备事务和 manager 使用的临时授权客户端保存在进程内存，定时清理任务会移除过期事务。该示例适合单实例学习，不适用于多实例横向扩展部署。
 
 ## 安全说明
 
 - 只有 `user_code` 和 GitHub 验证地址会发送给浏览器；`device_code` 和 access token 留在服务端。
 - 轮询遵循 GitHub 返回的 `interval`；收到 `slow_down` 时增加五秒。拒绝和过期状态会终止事务。
+- 浏览器轮询或连接 GitHub 设备令牌接口时遇到临时错误会自动重试；浏览器重试间隔逐步增加，最长 30 秒。拒绝、过期及其他终止性 GitHub 授权错误仍会结束事务。
 - 登录事务绑定发起请求的 HTTP Session，并使用不透明的随机 ID。
 - 返回浏览器前会校验 GitHub 验证地址。
 - Session Cookie 使用 `HttpOnly` 和 `SameSite=Lax`。通过 HTTPS 部署时设置 `SESSION_COOKIE_SECURE=true`。
-- 示例只把 GitHub 用户资料保存在 Session 中，不持久化用户和角色。
+- GitHub 用户资料和授权客户端保存在 HTTP Session 中；示例不持久化本站用户和角色。
 
 ## 使用 Spring Initializr 创建项目
 
-选择 Spring Boot 4.1.2、Java 25、Maven，并添加 Spring Security、Spring RestClient、Spring Jackson 和 Spring Web MVC。也可以使用 `spring-boot-developer` 技能生成相同基线，详见其[技能仓库](https://github.com/zhijunio/skills/tree/main/spring-boot-developer)。
+选择 Spring Boot 4.1.2、Java 25、Maven，并添加 Spring Security、OAuth2 Client、Spring RestClient、Spring Jackson 和 Spring Web MVC。也可以使用 `spring-boot-developer` 技能生成相同基线，详见其[技能仓库](https://github.com/zhijunio/skills/tree/main/spring-boot-developer)。

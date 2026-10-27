@@ -15,7 +15,8 @@ server:
         http-only: true
         same-site: lax
         secure: ${SESSION_COOKIE_SECURE:false}
+
 github:
   device-flow:
     client-id: ${GITHUB_CLIENT_ID:}
-    scope: read:user
+    device-authorization-uri: https://github.com/login/device/code
